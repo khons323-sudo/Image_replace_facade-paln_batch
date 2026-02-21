@@ -1,7 +1,7 @@
-streamlit==1.35.0
+streamlit>=1.40.0
 opencv-python-headless
 numpy
 Pillow
 google-genai
 streamlit-paste-button
-streamlit-drawable-canvas
+streamlit-drawable-canvas>=0.9.3
