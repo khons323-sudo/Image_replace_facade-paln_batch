@@ -5,39 +5,20 @@ from PIL import Image
 import io
 import zipfile
 import hashlib
-import base64
 from google import genai
 
-# --- [핵심 패치] Streamlit 버전 충돌 및 이미지 안보임 현상 영구 해결 ---
-import streamlit.elements.image as st_image
-def custom_image_to_url(image, width=None, clamp=False, channels="RGB", output_format="PNG", image_id="", *args, **kwargs):
-    """Streamlit 내부 API를 타지 않고 이미지를 Base64 문자열로 캔버스에 직접 꽂아 넣습니다."""
-    try:
-        if isinstance(image, np.ndarray):
-            image = Image.fromarray(image)
-        buffered = io.BytesIO()
-        if image.mode in ("RGBA", "P") and output_format.upper() == "JPEG":
-            image = image.convert("RGB")
-        fmt = output_format if output_format else "PNG"
-        image.save(buffered, format=fmt)
-        img_str = base64.b64encode(buffered.getvalue()).decode()
-        return f"data:image/{fmt.lower()};base64,{img_str}"
-    except Exception as e:
-        return ""
-st_image.image_to_url = custom_image_to_url
-# -------------------------------------------------------------------------
-
-# 클립보드 및 캔버스 컴포넌트
 from streamlit_paste_button import paste_image_button
 from streamlit_drawable_canvas import st_canvas
 
+# Streamlit 페이지 설정
 st.set_page_config(page_title="AI 패턴 합성기 (Nano Banana Pro)", layout="wide")
 
 def get_image_hash(pil_img):
-    """이미지 고유 해시 생성 (캔버스 강제 새로고침 및 중복 방지용)"""
+    """캔버스 새로고침 및 중복 방지를 위한 이미지 해시 생성"""
     return hashlib.md5(pil_img.tobytes()).hexdigest()
 
 def get_mask_from_canvas(canvas_image_data):
+    """캔버스 데이터(RGBA)에서 마킹 영역을 꽉 채운 마스크 추출"""
     if canvas_image_data is None:
         return None
     alpha = canvas_image_data[:, :, 3]
@@ -50,12 +31,14 @@ def get_mask_from_canvas(canvas_image_data):
     return cv2.bitwise_or(filled_mask, drawn_mask)
 
 def strict_composite(original_img_np, generated_img_np, mask_np):
+    """마킹되지 않은 원본 100% 보존, 마킹 영역만 합성"""
     h, w = original_img_np.shape[:2]
     generated_resized = cv2.resize(generated_img_np, (w, h))
     mask_3d = np.repeat(mask_np[:, :, np.newaxis], 3, axis=2)
     return np.where(mask_3d > 0, generated_resized, original_img_np)
 
 def process_with_nano_banana(api_key, img_a_pil, mask_np, img_b_pil):
+    """나노 바나나 프로(Gemini) API 호출"""
     client = genai.Client(api_key=api_key)
     mask_pil = Image.fromarray(mask_np).convert("L")
     prompt = """
@@ -128,7 +111,7 @@ with col_a2:
             
         img_a_resized_for_canvas = img_a_pil.resize((canvas_w, canvas_h))
 
-        # 🚀 핵심 해결 부분: 이미지가 바뀔 때마다 캔버스가 새로고침되도록 고유 Key 생성
+        # 동적 키 할당 (이미지가 바뀌면 캔버스도 새롭게 인식)
         unique_canvas_key = f"canvas_{get_image_hash(img_a_resized_for_canvas)}"
 
         canvas_result = st_canvas(
@@ -140,7 +123,7 @@ with col_a2:
             height=canvas_h,
             width=canvas_w,
             drawing_mode=drawing_mode,
-            key=unique_canvas_key, # 정적 키("canvas")에서 동적 키로 변경!
+            key=unique_canvas_key, 
         )
 
 st.divider()
