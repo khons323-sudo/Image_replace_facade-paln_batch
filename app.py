@@ -5,18 +5,32 @@ from PIL import Image
 import io
 import zipfile
 import hashlib
+import base64
 from google import genai
+
+# === 🚀 [핵심 패치] 캔버스 까만 화면 완벽 방지 (초경량 JPEG 변환) ===
+# 원본 이미지를 그대로 Base64로 넣으면 용량 초과로 브라우저가 화면을 까맣게 차단합니다.
+# 이를 막기 위해 화질을 유지하면서 용량을 1/10로 줄여 캔버스 배경에 부드럽게 띄웁니다.
+import streamlit.elements.image as st_image_mod
+
+def _patched_image_to_url(image, *args, **kwargs):
+    try:
+        buf = io.BytesIO()
+        if image.mode != "RGB":
+            image = image.convert("RGB")
+        image.save(buf, format="JPEG", quality=85) # 용량 압축
+        b64_str = base64.b64encode(buf.getvalue()).decode()
+        return f"data:image/jpeg;base64,{b64_str}"
+    except Exception:
+        return ""
+
+st_image_mod.image_to_url = _patched_image_to_url
+# ===================================================================
 
 from streamlit_paste_button import paste_image_button
 from streamlit_drawable_canvas import st_canvas
 
 st.set_page_config(page_title="AI 패턴 합성기 (Nano Banana Pro)", layout="wide")
-
-# 안전한 이미지 출력 함수 (Numpy 충돌 원천 차단)
-def display_image_safe(container, pil_img, caption):
-    buf = io.BytesIO()
-    pil_img.save(buf, format="PNG")
-    container.image(buf.getvalue(), caption=caption, use_container_width=True)
 
 def get_image_hash(pil_img):
     return hashlib.md5(pil_img.tobytes()).hexdigest()
@@ -113,7 +127,6 @@ with col_a2:
         img_a_resized_for_canvas = img_a_pil.resize((canvas_w, canvas_h))
         unique_canvas_key = f"canvas_{get_image_hash(img_a_resized_for_canvas)}"
 
-        # 1.35.0 버전에서는 캔버스가 완벽하고 선명하게 나옵니다.
         canvas_result = st_canvas(
             fill_color="rgba(255, 0, 0, 0.3)", 
             stroke_width=stroke_width,
@@ -156,7 +169,8 @@ with col_b2:
         with st.expander("🖼️ 준비된 패턴 이미지 미리보기"):
             cols = st.columns(3)
             for idx, (b_name, b_img) in enumerate(all_b_images):
-                display_image_safe(cols[idx % 3], b_img, b_name)
+                # 최신 Streamlit에서는 안전하게 바로 출력 가능
+                cols[idx % 3].image(b_img, caption=b_name, use_container_width=True)
             
             if st.session_state.pasted_b_images:
                 if st.button("🗑️ 붙여넣은 이미지 모두 지우기", key="btn_clear_b"):
@@ -206,7 +220,8 @@ if st.session_state.generated_results:
     
     for idx, res in enumerate(st.session_state.generated_results):
         with cols[idx % 3]:
-            display_image_safe(cols[idx % 3], res["image"], res["name"])
+            # 최신 Streamlit에서는 안전하게 바로 출력 가능
+            st.image(res["image"], caption=res["name"], use_container_width=True)
             if st.checkbox(f"저장 선택: {res['name']}", value=True, key=f"chk_{res['name']}_{idx}"):
                 selected_files.append(res)
                 
