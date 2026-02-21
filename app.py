@@ -7,6 +7,16 @@ import zipfile
 import hashlib
 from google import genai
 
+# --- [중요 패치] 최신 Streamlit(1.40.0+)과 drawable-canvas 라이브러리 충돌 해결 ---
+try:
+    import streamlit.elements.image
+    if not hasattr(streamlit.elements.image, 'image_to_url'):
+        import streamlit.elements.lib.image_utils
+        streamlit.elements.image.image_to_url = streamlit.elements.lib.image_utils.image_to_url
+except Exception:
+    pass
+# -------------------------------------------------------------------------
+
 # 클립보드 붙여넣기 컴포넌트
 from streamlit_paste_button import paste_image_button
 # 직접 마킹(그리기) 지원 컴포넌트
@@ -127,7 +137,7 @@ with col_a2:
         
         stroke_width = st.slider("펜 굵기", 1, 50, 15, key="stroke_width")
         
-        # 캔버스 크기 최적화 (가로 최대 800px로 제한하여 브라우저 부담 완화)
+        # 캔버스 크기 최적화
         max_width = 800
         canvas_w, canvas_h = img_a_pil.width, img_a_pil.height
         if canvas_w > max_width:
