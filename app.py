@@ -65,39 +65,42 @@ def process_with_nano_banana(api_key, img_a_pil, mask_np, img_b_pil):
     
     for part in response.candidates[0].content.parts:
         if part.inline_data:
-            return Image.open(io.BytesIO(part.inline_data.data))
+            ai_output_pil = Image.open(io.BytesIO(part.inline_data.data))
+            
+            # [중요] 원본 A 이미지와 100% 동일한 해상도/비율로 강제 맞춤
+            if ai_output_pil.size != img_a_pil.size:
+                ai_output_pil = ai_output_pil.resize(img_a_pil.size, Image.Resampling.LANCZOS)
+                
+            return ai_output_pil
             
     raise ValueError("AI가 이미지를 반환하지 않았습니다.")
-
 
 # --- UI 및 상태 관리 ---
 st.title("🍌 Nano Banana Pro: AI 마킹 영역 패턴 자연 합성기")
 st.markdown("💡 **파일 선택 방식:** 점선 박스에 **Drag & Drop** 하거나, 전용 버튼을 눌러 **Copy & Paste (클립보드)** 가 모두 가능합니다!")
 
-# 모든 위젯에 명시적인 key 부여 (StreamlitDuplicateElementKey 에러 방지)
 api_key = st.sidebar.text_input("🔑 Google Gemini API Key 입력", type="password", key="input_api_key")
 
-# 클립보드 붙여넣기 이미지들을 저장할 Session State 초기화
+# Session State 초기화 (붙여넣기 상태 및 결과물 저장용)
 if "pasted_a_image" not in st.session_state:
     st.session_state.pasted_a_image = None
 if "pasted_b_images" not in st.session_state:
     st.session_state.pasted_b_images = {}
+if "generated_results" not in st.session_state:
+    st.session_state.generated_results = []
 
 col1, col2 = st.columns(2)
 
 with col1:
     st.subheader("1. 기준 이미지 (Image A)")
-    
-    # 1. Drag & Drop 영역
     file_a = st.file_uploader("📂 [Drag & Drop] 마킹된 원본 이미지", type=["png", "jpg", "jpeg"], key="uploader_img_a")
     
-    # 2. Copy & Paste 영역
     st.markdown("또는 클립보드에 복사(Ctrl+C)한 후 아래 버튼 클릭:")
     paste_a_result = paste_image_button(
         label="📋 [Copy & Paste] 이미지 A 붙여넣기", 
         background_color="#4CAF50", 
         hover_background_color="#45a049", 
-        key="paste_btn_a"  # 고유 Key 지정
+        key="paste_btn_a"
     )
     
     img_a_pil = None
@@ -111,22 +114,18 @@ with col1:
         img_a_pil = st.session_state.pasted_a_image
 
     if img_a_pil:
-        st.image(img_a_pil, caption="✅ [준비 완료] 기준 이미지 A", use_container_width=True)
-
+        st.image(img_a_pil, caption=f"✅ [준비 완료] 기준 이미지 A ({img_a_pil.width}x{img_a_pil.height})", use_container_width=True)
 
 with col2:
     st.subheader("2. 패턴/분위기 이미지 (Image B들)")
-    
-    # 1. Drag & Drop 영역
     files_b = st.file_uploader("📂 [Drag & Drop] 패턴 이미지 (여러 장 가능)", type=["png", "jpg", "jpeg"], accept_multiple_files=True, key="uploader_img_b")
     
-    # 2. Copy & Paste 영역
     st.markdown("또는 클립보드에 복사(Ctrl+C)한 후 계속해서 아래 버튼 클릭:")
     paste_b_result = paste_image_button(
         label="📋 [Copy & Paste] 패턴 이미지 B 붙여넣기", 
         background_color="#2196F3", 
         hover_background_color="#0b7dda", 
-        key="paste_btn_b"  # 고유 Key 지정
+        key="paste_btn_b"
     )
     
     if paste_b_result.image_data is not None:
@@ -145,22 +144,20 @@ with col2:
     if all_b_images:
         st.success(f"✅ 총 {len(all_b_images)}장의 패턴 이미지가 준비되었습니다.")
         with st.expander("🖼️ 준비된 패턴 이미지 미리보기 및 관리"):
-            cols = st.columns(3)
+            cols_b = st.columns(3)
             for idx, (b_name, b_img) in enumerate(all_b_images):
-                cols[idx % 3].image(b_img, caption=b_name, use_container_width=True)
+                cols_b[idx % 3].image(b_img, caption=b_name, use_container_width=True)
             
             if st.session_state.pasted_b_images:
-                # 삭제 버튼에도 고유 Key 지정
                 if st.button("🗑️ 붙여넣은 패턴 이미지 모두 지우기", key="btn_clear_b_images"):
                     st.session_state.pasted_b_images = {}
                     st.rerun()
 
 st.divider()
 
-# --- AI 처리 및 저장 로직 ---
+# --- AI 처리 로직 ---
 if img_a_pil and all_b_images:
-    # 실행 버튼에도 고유 Key 지정
-    if st.button("🚀 AI 자동 합성 및 일괄 다운로드 준비", use_container_width=True, key="btn_start_ai_process"):
+    if st.button("🚀 AI 합성 시작하기", use_container_width=True, key="btn_start_ai_process"):
         if not api_key:
             st.error("좌측 사이드바에 Google Gemini API Key를 입력해주세요!")
         else:
@@ -172,29 +169,62 @@ if img_a_pil and all_b_images:
                     if cv2.countNonZero(mask_np) == 0:
                         st.error("기준 이미지에서 빨간색 마킹을 찾을 수 없습니다.")
                     else:
-                        zip_buffer = io.BytesIO()
+                        # 기존 결과물 초기화
+                        st.session_state.generated_results = []
                         
-                        with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zip_file:
-                            for b_name, b_img in all_b_images:
-                                result_pil = process_with_nano_banana(api_key, img_a_pil, mask_np, b_img)
-                                
-                                img_byte_arr = io.BytesIO()
-                                result_pil.save(img_byte_arr, format='JPEG', quality=95)
-                                
-                                output_filename = f"ai_result_{b_name}"
-                                zip_file.writestr(output_filename, img_byte_arr.getvalue())
-                        
-                        zip_buffer.seek(0)
-                        st.success("🎉 AI 합성이 성공적으로 완료되었습니다!")
-                        
-                        # 다운로드 버튼에도 고유 Key 지정
-                        st.download_button(
-                            label="💾 전체 결과 이미지 일괄 다운로드 (.zip)",
-                            data=zip_buffer,
-                            file_name="nano_banana_results.zip",
-                            mime="application/zip",
-                            use_container_width=True,
-                            key="btn_download_zip"
-                        )
+                        for b_name, b_img in all_b_images:
+                            # 100% 동일한 사이즈로 리사이즈된 결과물 획득
+                            result_pil = process_with_nano_banana(api_key, img_a_pil, mask_np, b_img)
+                            output_filename = f"ai_result_{b_name}"
+                            
+                            # Session State에 저장 (화면 새로고침 시 유지)
+                            st.session_state.generated_results.append({
+                                "filename": output_filename,
+                                "image": result_pil
+                            })
+                            
+                        st.success("🎉 AI 합성이 성공적으로 완료되었습니다! 아래에서 결과를 확인하세요.")
                 except Exception as e:
                     st.error(f"API 호출 중 오류가 발생했습니다: {e}")
+
+# --- 결과물 미리보기 및 선택적 다운로드 섹션 ---
+if st.session_state.generated_results:
+    st.header("🎯 생성된 결과물 선택 및 다운로드")
+    st.info(f"모든 결과물은 원본 A 이미지와 동일한 크기({st.session_state.generated_results[0]['image'].width}x{st.session_state.generated_results[0]['image'].height})로 유지됩니다.")
+    
+    selected_images = []
+    cols_res = st.columns(3)
+    
+    # 생성된 이미지들을 화면에 보여주고 체크박스 생성
+    for idx, item in enumerate(st.session_state.generated_results):
+        with cols_res[idx % 3]:
+            st.image(item["image"], caption=item["filename"], use_container_width=True)
+            # 체크박스 (기본값: True)
+            is_selected = st.checkbox("이 이미지 다운로드", value=True, key=f"check_download_{idx}_{item['filename']}")
+            
+            if is_selected:
+                selected_images.append(item)
+    
+    st.divider()
+    
+    # 선택된 이미지가 있을 때만 ZIP으로 묶어서 다운로드 제공
+    if selected_images:
+        zip_buffer = io.BytesIO()
+        with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zip_file:
+            for item in selected_images:
+                img_byte_arr = io.BytesIO()
+                item["image"].save(img_byte_arr, format='JPEG', quality=100)
+                zip_file.writestr(item["filename"], img_byte_arr.getvalue())
+        
+        zip_buffer.seek(0)
+        
+        st.download_button(
+            label=f"💾 선택한 이미지({len(selected_images)}장) 일괄 다운로드 (.zip)",
+            data=zip_buffer,
+            file_name="selected_nano_banana_results.zip",
+            mime="application/zip",
+            use_container_width=True,
+            key="btn_download_selected_zip"
+        )
+    else:
+        st.warning("다운로드할 이미지를 최소 1장 이상 선택해주세요.")
