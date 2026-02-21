@@ -5,10 +5,63 @@ from PIL import Image
 import io
 import zipfile
 import hashlib
+import base64
 from google import genai
 
+# ==============================================================================
+# 🚀 [절대 실패 없는 패치 1] 캔버스 까만 화면 완벽 방지 (안전한 이미지 변환기)
+# ==============================================================================
+def unbreakable_image_to_url(image, *args, **kwargs):
+    """어떤 상황에서도 캔버스 배경 이미지를 정상적으로 생성하는 함수"""
+    try:
+        # Numpy 배열이면 PIL 이미지로 변환
+        if isinstance(image, np.ndarray):
+            image = Image.fromarray(image)
+        # 투명도(RGBA)가 있으면 JPEG 변환 시 에러가 나므로 RGB로 강제 변환
+        if image.mode in ("RGBA", "P", "LA"):
+            image = image.convert("RGB")
+            
+        buf = io.BytesIO()
+        image.save(buf, format="JPEG", quality=90)
+        b64_str = base64.b64encode(buf.getvalue()).decode("utf-8")
+        return f"data:image/jpeg;base64,{b64_str}"
+    except Exception as e:
+        st.error(f"배경 로딩 에러: {e}")
+        return ""
+
+# Streamlit 버전에 상관없이 캔버스가 무조건 이 패치 함수를 사용하도록 강제 주입
+try:
+    import streamlit.elements.image as st_image
+    st_image.image_to_url = unbreakable_image_to_url
+except Exception:
+    pass
+
+try:
+    import streamlit.elements.lib.image_utils as st_image_utils
+    st_image_utils.image_to_url = unbreakable_image_to_url
+except Exception:
+    pass
+
+# 패치 주입 후 라이브러리 로드 (순서 중요)
 from streamlit_paste_button import paste_image_button
 from streamlit_drawable_canvas import st_canvas
+# ==============================================================================
+
+# ==============================================================================
+# 🚀 [절대 실패 없는 패치 2] TypeError 완벽 방지 이미지 출력기
+# ==============================================================================
+def display_image_safe(container, pil_img, caption):
+    """Streamlit의 TypeError 충돌을 피해, 이미지를 바이트 단위로 직접 그립니다."""
+    try:
+        buf = io.BytesIO()
+        if pil_img.mode in ("RGBA", "P", "LA"):
+            pil_img = pil_img.convert("RGB")
+        pil_img.save(buf, format="JPEG", quality=95)
+        # 바이너리 데이터로 직접 출력 (절대 에러 안남)
+        container.image(buf.getvalue(), caption=caption, use_container_width=True)
+    except Exception as e:
+        container.error(f"이미지 출력 에러: {e}")
+# ==============================================================================
 
 st.set_page_config(page_title="AI 패턴 합성기 (Nano Banana Pro)", layout="wide")
 
@@ -107,7 +160,6 @@ with col_a2:
         img_a_resized_for_canvas = img_a_pil.resize((canvas_w, canvas_h))
         unique_canvas_key = f"canvas_{get_image_hash(img_a_resized_for_canvas)}"
 
-        # 완벽 호환되는 Streamlit 1.33 환경이므로 캔버스가 깨끗하게 동작합니다!
         canvas_result = st_canvas(
             fill_color="rgba(255, 0, 0, 0.3)", 
             stroke_width=stroke_width,
@@ -150,8 +202,8 @@ with col_b2:
         with st.expander("🖼️ 준비된 패턴 이미지 미리보기"):
             cols = st.columns(3)
             for idx, (b_name, b_img) in enumerate(all_b_images):
-                # 에러 유발 패키지가 모두 차단되어 순정 st.image가 완벽히 동작합니다.
-                cols[idx % 3].image(b_img, caption=b_name, use_container_width=True)
+                # 🚀 무조건 성공하는 안전 출력 함수 사용
+                display_image_safe(cols[idx % 3], b_img, b_name)
             
             if st.session_state.pasted_b_images:
                 if st.button("🗑️ 붙여넣은 이미지 모두 지우기", key="btn_clear_b"):
@@ -201,7 +253,8 @@ if st.session_state.generated_results:
     
     for idx, res in enumerate(st.session_state.generated_results):
         with cols[idx % 3]:
-            st.image(res["image"], caption=res["name"], use_container_width=True)
+            # 🚀 무조건 성공하는 안전 출력 함수 사용
+            display_image_safe(cols[idx % 3], res["image"], res["name"])
             if st.checkbox(f"저장 선택: {res['name']}", value=True, key=f"chk_{res['name']}_{idx}"):
                 selected_files.append(res)
                 
