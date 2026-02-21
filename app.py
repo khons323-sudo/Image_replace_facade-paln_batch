@@ -5,70 +5,76 @@ from PIL import Image
 import io
 import zipfile
 import hashlib
+import base64
 from google import genai
 
-# 클립보드 붙여넣기 컴포넌트
+# --- [핵심 패치] Streamlit 버전 충돌 및 이미지 안보임 현상 영구 해결 ---
+import streamlit.elements.image as st_image
+def custom_image_to_url(image, width=None, clamp=False, channels="RGB", output_format="PNG", image_id="", *args, **kwargs):
+    """Streamlit 내부 API를 타지 않고 이미지를 Base64 문자열로 캔버스에 직접 꽂아 넣습니다."""
+    try:
+        if isinstance(image, np.ndarray):
+            image = Image.fromarray(image)
+        buffered = io.BytesIO()
+        if image.mode in ("RGBA", "P") and output_format.upper() == "JPEG":
+            image = image.convert("RGB")
+        fmt = output_format if output_format else "PNG"
+        image.save(buffered, format=fmt)
+        img_str = base64.b64encode(buffered.getvalue()).decode()
+        return f"data:image/{fmt.lower()};base64,{img_str}"
+    except Exception as e:
+        return ""
+st_image.image_to_url = custom_image_to_url
+# -------------------------------------------------------------------------
+
+# 클립보드 및 캔버스 컴포넌트
 from streamlit_paste_button import paste_image_button
-# 직접 마킹(그리기) 지원 컴포넌트
 from streamlit_drawable_canvas import st_canvas
 
-# Streamlit 페이지 설정
 st.set_page_config(page_title="AI 패턴 합성기 (Nano Banana Pro)", layout="wide")
 
 def get_image_hash(pil_img):
-    """이미지 중복 방지를 위한 해시 생성"""
+    """이미지 고유 해시 생성 (캔버스 강제 새로고침 및 중복 방지용)"""
     return hashlib.md5(pil_img.tobytes()).hexdigest()
 
 def get_mask_from_canvas(canvas_image_data):
-    """캔버스 데이터(RGBA)에서 사용자가 그린 부분과 안쪽을 꽉 채운 마스크 추출"""
     if canvas_image_data is None:
         return None
-    
     alpha = canvas_image_data[:, :, 3]
     drawn_mask = (alpha > 0).astype(np.uint8) * 255
-    
     kernel = np.ones((5,5), np.uint8)
     drawn_mask = cv2.morphologyEx(drawn_mask, cv2.MORPH_CLOSE, kernel)
-    
     contours, _ = cv2.findContours(drawn_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
     filled_mask = np.zeros_like(drawn_mask)
     cv2.drawContours(filled_mask, contours, -1, (255), thickness=cv2.FILLED)
-    
-    final_mask = cv2.bitwise_or(filled_mask, drawn_mask)
-    return final_mask
+    return cv2.bitwise_or(filled_mask, drawn_mask)
 
 def strict_composite(original_img_np, generated_img_np, mask_np):
-    """마킹되지 않은 원본 영역 100% 보존, 마킹된 부분만 AI 이미지로 교체"""
     h, w = original_img_np.shape[:2]
     generated_resized = cv2.resize(generated_img_np, (w, h))
     mask_3d = np.repeat(mask_np[:, :, np.newaxis], 3, axis=2)
-    final_img_np = np.where(mask_3d > 0, generated_resized, original_img_np)
-    return final_img_np
+    return np.where(mask_3d > 0, generated_resized, original_img_np)
 
 def process_with_nano_banana(api_key, img_a_pil, mask_np, img_b_pil):
-    """나노 바나나 프로(Gemini) API 호출"""
     client = genai.Client(api_key=api_key)
     mask_pil = Image.fromarray(mask_np).convert("L")
-    
     prompt = """
     You are an expert AI image editor.
     1. Base Image
     2. Mask Image (white area is the target)
     3. Reference Style Image
-    
     Task: Inpaint the masked area ONLY naturally using the pattern, texture, and atmosphere of the Reference Style Image. Output ONLY the edited image.
     """
     response = client.models.generate_content(
         model='gemini-3-pro-image-preview',
         contents=[prompt, img_a_pil, mask_pil, img_b_pil]
     )
-    
     for part in response.candidates[0].content.parts:
         if part.inline_data:
             return Image.open(io.BytesIO(part.inline_data.data)).convert('RGB')
     raise ValueError("AI가 이미지를 반환하지 않았습니다.")
 
-# --- 세션 상태 초기화 ---
+# --- 세션 초기화 ---
 if "pasted_a_image" not in st.session_state:
     st.session_state.pasted_a_image = None
 if "pasted_b_images" not in st.session_state:
@@ -78,7 +84,7 @@ if "generated_results" not in st.session_state:
 
 # --- UI 구현 ---
 st.title("🍌 Nano Banana Pro: AI 마킹 영역 패턴 자연 합성기")
-st.markdown("💡 **진행 순서:** 기준 이미지 업로드 ➡️ 직접 마킹 ➡️ 패턴 이미지 업로드 ➡️ AI 합성 ➡️ 결과 확인 및 선택 다운로드")
+st.markdown("💡 **진행 순서:** 기준 이미지 업로드 ➡️ 직접 마킹 ➡️ 패턴 이미지 업로드 ➡️ AI 합성 ➡️ 결과 다운로드")
 
 api_key = st.sidebar.text_input("🔑 Google Gemini API Key 입력", type="password", key="input_api_key")
 
@@ -87,7 +93,6 @@ col_a1, col_a2 = st.columns([1, 2])
 
 with col_a1:
     file_a = st.file_uploader("📂 [Drag & Drop] 기준 이미지", type=["png", "jpg", "jpeg"], key="uploader_img_a")
-    st.markdown("또는 클립보드 붙여넣기(Ctrl+C 후 클릭):")
     paste_a_result = paste_image_button(
         label="📋 [Copy & Paste] 이미지 A 붙여넣기", 
         background_color="#4CAF50", hover_background_color="#45a049", key="paste_btn_a"
@@ -114,7 +119,6 @@ with col_a2:
         
         stroke_width = st.slider("펜 굵기", 1, 50, 15, key="stroke_width")
         
-        # 캔버스 크기 최적화 (가로 800px 제한)
         max_width = 800
         canvas_w, canvas_h = img_a_pil.width, img_a_pil.height
         if canvas_w > max_width:
@@ -124,7 +128,9 @@ with col_a2:
             
         img_a_resized_for_canvas = img_a_pil.resize((canvas_w, canvas_h))
 
-        # 캔버스 렌더링
+        # 🚀 핵심 해결 부분: 이미지가 바뀔 때마다 캔버스가 새로고침되도록 고유 Key 생성
+        unique_canvas_key = f"canvas_{get_image_hash(img_a_resized_for_canvas)}"
+
         canvas_result = st_canvas(
             fill_color="rgba(255, 0, 0, 0.3)", 
             stroke_width=stroke_width,
@@ -134,7 +140,7 @@ with col_a2:
             height=canvas_h,
             width=canvas_w,
             drawing_mode=drawing_mode,
-            key="canvas",
+            key=unique_canvas_key, # 정적 키("canvas")에서 동적 키로 변경!
         )
 
 st.divider()
@@ -144,7 +150,6 @@ col_b1, col_b2 = st.columns([1, 2])
 
 with col_b1:
     files_b = st.file_uploader("📂 [Drag & Drop] 패턴 이미지 (여러 장 가능)", type=["png", "jpg", "jpeg"], accept_multiple_files=True, key="uploader_img_b")
-    st.markdown("또는 클립보드 붙여넣기(연속 가능):")
     paste_b_result = paste_image_button(
         label="📋 [Copy & Paste] 패턴 이미지 붙여넣기", 
         background_color="#2196F3", hover_background_color="#0b7dda", key="paste_btn_b"
@@ -184,13 +189,13 @@ if img_a_pil and all_b_images:
         elif canvas_result.image_data is None:
             st.error("이미지에 영역을 마킹(그리기) 해주세요.")
         else:
-            with st.spinner("🍌 나노 바나나 프로 AI 합성 중... (원본 이미지 형태 완벽 보존 처리 중)"):
+            with st.spinner("🍌 나노 바나나 프로 AI 합성 중... (원본 형태 완벽 보존 처리 중)"):
                 try:
                     mask_np_resized = get_mask_from_canvas(canvas_result.image_data)
                     mask_np = cv2.resize(mask_np_resized, (img_a_pil.width, img_a_pil.height), interpolation=cv2.INTER_NEAREST)
                     
                     if cv2.countNonZero(mask_np) == 0:
-                        st.error("그려진 마킹 영역이 없습니다. Step 1에서 캔버스에 빨간 펜으로 영역을 그려주세요.")
+                        st.error("그려진 마킹 영역이 없습니다. Step 1에서 영역을 그려주세요.")
                     else:
                         img_a_np = np.array(img_a_pil)
                         results_temp = []
@@ -201,11 +206,7 @@ if img_a_pil and all_b_images:
                             
                             final_np = strict_composite(img_a_np, ai_output_np, mask_np)
                             final_pil = Image.fromarray(final_np)
-                            
-                            results_temp.append({
-                                "name": f"result_{b_name}",
-                                "image": final_pil
-                            })
+                            results_temp.append({"name": f"result_{b_name}", "image": final_pil})
                             
                         st.session_state.generated_results = results_temp
                         st.success("🎉 합성이 완료되었습니다! 아래에서 결과를 확인하세요.")
@@ -216,7 +217,6 @@ st.divider()
 
 if st.session_state.generated_results:
     st.header("Step 4. 결과 확인 및 다운로드")
-    
     selected_files = []
     cols = st.columns(3)
     
@@ -227,15 +227,12 @@ if st.session_state.generated_results:
                 selected_files.append(res)
                 
     if selected_files:
-        st.write(f"선택된 파일 수: **{len(selected_files)}**장")
-        
         zip_buffer = io.BytesIO()
         with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zip_file:
             for item in selected_files:
                 img_byte_arr = io.BytesIO()
                 item["image"].save(img_byte_arr, format='JPEG', quality=100)
                 zip_file.writestr(item["name"], img_byte_arr.getvalue())
-        
         zip_buffer.seek(0)
         
         st.download_button(
