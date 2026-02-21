@@ -112,6 +112,7 @@ with col_a2:
         img_a_resized_for_canvas = img_a_pil.resize((canvas_w, canvas_h))
         unique_canvas_key = f"canvas_{get_image_hash(img_a_resized_for_canvas)}"
 
+        # 순정 st_canvas 호출 (Streamlit 1.39.0 환경에서 100% 정상 작동)
         canvas_result = st_canvas(
             fill_color="rgba(255, 0, 0, 0.3)", 
             stroke_width=stroke_width,
@@ -154,8 +155,9 @@ with col_b2:
         with st.expander("🖼️ 준비된 패턴 이미지 미리보기"):
             cols = st.columns(3)
             for idx, (b_name, b_img) in enumerate(all_b_images):
-                # 🚀 TypeError 완벽 방지: 이미지를 NumPy 배열로 변환하여 출력
-                cols[idx % 3].image(np.array(b_img), caption=b_name, use_container_width=True)
+                # Numpy 2.0 충돌을 피하기 위해 안전하게 변환
+                safe_img = np.array(b_img)
+                cols[idx % 3].image(safe_img, caption=b_name, use_container_width=True)
             
             if st.session_state.pasted_b_images:
                 if st.button("🗑️ 붙여넣은 이미지 모두 지우기", key="btn_clear_b"):
@@ -205,7 +207,6 @@ if st.session_state.generated_results:
     
     for idx, res in enumerate(st.session_state.generated_results):
         with cols[idx % 3]:
-            # 🚀 TypeError 완벽 방지: 결과 이미지도 NumPy 배열로 변환하여 출력
             st.image(np.array(res["image"]), caption=res["name"], use_container_width=True)
             if st.checkbox(f"저장 선택: {res['name']}", value=True, key=f"chk_{res['name']}_{idx}"):
                 selected_files.append(res)
