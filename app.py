@@ -69,11 +69,13 @@ def process_with_nano_banana(api_key, img_a_pil, mask_np, img_b_pil):
             
     raise ValueError("AI가 이미지를 반환하지 않았습니다.")
 
+
 # --- UI 및 상태 관리 ---
 st.title("🍌 Nano Banana Pro: AI 마킹 영역 패턴 자연 합성기")
 st.markdown("💡 **파일 선택 방식:** 점선 박스에 **Drag & Drop** 하거나, 전용 버튼을 눌러 **Copy & Paste (클립보드)** 가 모두 가능합니다!")
 
-api_key = st.sidebar.text_input("🔑 Google Gemini API Key 입력", type="password")
+# 모든 위젯에 명시적인 key 부여 (StreamlitDuplicateElementKey 에러 방지)
+api_key = st.sidebar.text_input("🔑 Google Gemini API Key 입력", type="password", key="input_api_key")
 
 # 클립보드 붙여넣기 이미지들을 저장할 Session State 초기화
 if "pasted_a_image" not in st.session_state:
@@ -87,17 +89,21 @@ with col1:
     st.subheader("1. 기준 이미지 (Image A)")
     
     # 1. Drag & Drop 영역
-    file_a = st.file_uploader("📂 [Drag & Drop] 마킹된 원본 이미지", type=["png", "jpg", "jpeg"], key="img_a")
+    file_a = st.file_uploader("📂 [Drag & Drop] 마킹된 원본 이미지", type=["png", "jpg", "jpeg"], key="uploader_img_a")
     
     # 2. Copy & Paste 영역
     st.markdown("또는 클립보드에 복사(Ctrl+C)한 후 아래 버튼 클릭:")
-    paste_a_result = paste_image_button(label="📋 [Copy & Paste] 이미지 A 붙여넣기", background_color="#4CAF50", hover_background_color="#45a049")
+    paste_a_result = paste_image_button(
+        label="📋 [Copy & Paste] 이미지 A 붙여넣기", 
+        background_color="#4CAF50", 
+        hover_background_color="#45a049", 
+        key="paste_btn_a"  # 고유 Key 지정
+    )
     
-    # 두 소스(드래그, 붙여넣기) 중 하나라도 있으면 img_a_pil로 설정
     img_a_pil = None
     if file_a is not None:
         img_a_pil = Image.open(file_a).convert('RGB')
-        st.session_state.pasted_a_image = None  # 파일이 우선시되도록 기존 붙여넣기 초기화
+        st.session_state.pasted_a_image = None 
     elif paste_a_result.image_data is not None:
         img_a_pil = paste_a_result.image_data.convert('RGB')
         st.session_state.pasted_a_image = img_a_pil
@@ -107,23 +113,27 @@ with col1:
     if img_a_pil:
         st.image(img_a_pil, caption="✅ [준비 완료] 기준 이미지 A", use_container_width=True)
 
+
 with col2:
     st.subheader("2. 패턴/분위기 이미지 (Image B들)")
     
     # 1. Drag & Drop 영역
-    files_b = st.file_uploader("📂 [Drag & Drop] 패턴 이미지 (여러 장 가능)", type=["png", "jpg", "jpeg"], accept_multiple_files=True, key="img_b")
+    files_b = st.file_uploader("📂 [Drag & Drop] 패턴 이미지 (여러 장 가능)", type=["png", "jpg", "jpeg"], accept_multiple_files=True, key="uploader_img_b")
     
     # 2. Copy & Paste 영역
     st.markdown("또는 클립보드에 복사(Ctrl+C)한 후 계속해서 아래 버튼 클릭:")
-    paste_b_result = paste_image_button(label="📋 [Copy & Paste] 패턴 이미지 B 붙여넣기", background_color="#2196F3", hover_background_color="#0b7dda")
+    paste_b_result = paste_image_button(
+        label="📋 [Copy & Paste] 패턴 이미지 B 붙여넣기", 
+        background_color="#2196F3", 
+        hover_background_color="#0b7dda", 
+        key="paste_btn_b"  # 고유 Key 지정
+    )
     
-    # 붙여넣은 B 이미지는 리스트(Session State)에 누적 저장
     if paste_b_result.image_data is not None:
         img_hash = get_image_hash(paste_b_result.image_data)
         if img_hash not in st.session_state.pasted_b_images:
             st.session_state.pasted_b_images[img_hash] = paste_b_result.image_data.convert('RGB')
 
-    # Drag & Drop 된 파일 + Copy & Paste 된 파일 하나로 합치기
     all_b_images = []
     if files_b:
         for fb in files_b:
@@ -132,7 +142,6 @@ with col2:
     for i, (h, p_img) in enumerate(st.session_state.pasted_b_images.items()):
         all_b_images.append((f"pasted_image_{i+1}.jpg", p_img))
 
-    # 취합된 B 이미지 상태 표시 및 관리
     if all_b_images:
         st.success(f"✅ 총 {len(all_b_images)}장의 패턴 이미지가 준비되었습니다.")
         with st.expander("🖼️ 준비된 패턴 이미지 미리보기 및 관리"):
@@ -140,9 +149,9 @@ with col2:
             for idx, (b_name, b_img) in enumerate(all_b_images):
                 cols[idx % 3].image(b_img, caption=b_name, use_container_width=True)
             
-            # 붙여넣은 이미지 초기화 버튼
             if st.session_state.pasted_b_images:
-                if st.button("🗑️ 붙여넣은 패턴 이미지 모두 지우기"):
+                # 삭제 버튼에도 고유 Key 지정
+                if st.button("🗑️ 붙여넣은 패턴 이미지 모두 지우기", key="btn_clear_b_images"):
                     st.session_state.pasted_b_images = {}
                     st.rerun()
 
@@ -150,7 +159,8 @@ st.divider()
 
 # --- AI 처리 및 저장 로직 ---
 if img_a_pil and all_b_images:
-    if st.button("🚀 AI 자동 합성 및 일괄 다운로드 준비", use_container_width=True):
+    # 실행 버튼에도 고유 Key 지정
+    if st.button("🚀 AI 자동 합성 및 일괄 다운로드 준비", use_container_width=True, key="btn_start_ai_process"):
         if not api_key:
             st.error("좌측 사이드바에 Google Gemini API Key를 입력해주세요!")
         else:
@@ -164,30 +174,27 @@ if img_a_pil and all_b_images:
                     else:
                         zip_buffer = io.BytesIO()
                         
-                        # 취합된 전체 B 이미지를 순회하며 AI 합성
                         with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zip_file:
                             for b_name, b_img in all_b_images:
-                                # AI 합성 실행
                                 result_pil = process_with_nano_banana(api_key, img_a_pil, mask_np, b_img)
                                 
-                                # 메모리에 압축
                                 img_byte_arr = io.BytesIO()
                                 result_pil.save(img_byte_arr, format='JPEG', quality=95)
                                 
-                                # 고유 파일명 지정
                                 output_filename = f"ai_result_{b_name}"
                                 zip_file.writestr(output_filename, img_byte_arr.getvalue())
                         
                         zip_buffer.seek(0)
                         st.success("🎉 AI 합성이 성공적으로 완료되었습니다!")
                         
-                        # 일괄 다운로드
+                        # 다운로드 버튼에도 고유 Key 지정
                         st.download_button(
                             label="💾 전체 결과 이미지 일괄 다운로드 (.zip)",
                             data=zip_buffer,
                             file_name="nano_banana_results.zip",
                             mime="application/zip",
-                            use_container_width=True
+                            use_container_width=True,
+                            key="btn_download_zip"
                         )
                 except Exception as e:
                     st.error(f"API 호출 중 오류가 발생했습니다: {e}")
