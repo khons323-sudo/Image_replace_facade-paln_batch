@@ -5,16 +5,32 @@ from PIL import Image
 import io
 import zipfile
 import hashlib
+import base64
 from google import genai
 
-# --- [중요 패치] 최신 Streamlit(1.40.0+)과 drawable-canvas 라이브러리 충돌 해결 ---
-try:
-    import streamlit.elements.image
-    if not hasattr(streamlit.elements.image, 'image_to_url'):
-        import streamlit.elements.lib.image_utils
-        streamlit.elements.image.image_to_url = streamlit.elements.lib.image_utils.image_to_url
-except Exception:
-    pass
+# --- [중요 패치] Streamlit 1.40.0+ 호환성 영구 해결 (Base64 인코딩 우회) ---
+import streamlit.elements.image as st_image
+def custom_image_to_url(image, width=None, clamp=False, channels="RGB", output_format="PNG", image_id="", *args, **kwargs):
+    """Streamlit 내부 API를 타지 않고 이미지를 Base64 Data URI로 직접 변환"""
+    try:
+        if isinstance(image, np.ndarray):
+            image = Image.fromarray(image)
+        
+        buffered = io.BytesIO()
+        # RGBA 모드일 경우 포맷 충돌 방지
+        if image.mode == "RGBA" and output_format.upper() == "JPEG":
+            image = image.convert("RGB")
+            
+        fmt = output_format if output_format else "PNG"
+        image.save(buffered, format=fmt)
+        img_str = base64.b64encode(buffered.getvalue()).decode()
+        return f"data:image/{fmt.lower()};base64,{img_str}"
+    except Exception as e:
+        st.error(f"Image to URL 변환 에러: {e}")
+        return ""
+
+# st_canvas가 호출하는 구버전 함수를 커스텀 함수로 완벽히 덮어씌움
+st_image.image_to_url = custom_image_to_url
 # -------------------------------------------------------------------------
 
 # 클립보드 붙여넣기 컴포넌트
@@ -30,40 +46,28 @@ def get_image_hash(pil_img):
     return hashlib.md5(pil_img.tobytes()).hexdigest()
 
 def get_mask_from_canvas(canvas_image_data):
-    """캔버스에 그린 데이터(RGBA)에서 사용자가 그린 부분과 안쪽 영역을 꽉 채운 마스크 추출"""
+    """캔버스 데이터(RGBA)에서 사용자가 그린 부분과 안쪽을 꽉 채운 마스크 추출"""
     if canvas_image_data is None:
         return None
     
-    # 캔버스 데이터에서 알파(Alpha) 채널만 추출 (그려진 부분은 0보다 큼)
     alpha = canvas_image_data[:, :, 3]
     drawn_mask = (alpha > 0).astype(np.uint8) * 255
     
-    # 노이즈 제거
     kernel = np.ones((5,5), np.uint8)
     drawn_mask = cv2.morphologyEx(drawn_mask, cv2.MORPH_CLOSE, kernel)
     
-    # 그려진 윤곽선(직선, 원형, 자유곡선 등)의 안쪽을 꽉 채움
     contours, _ = cv2.findContours(drawn_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
     filled_mask = np.zeros_like(drawn_mask)
     cv2.drawContours(filled_mask, contours, -1, (255), thickness=cv2.FILLED)
     
-    # 최종 마스크 반환
     final_mask = cv2.bitwise_or(filled_mask, drawn_mask)
     return final_mask
 
 def strict_composite(original_img_np, generated_img_np, mask_np):
-    """
-    원본 이미지의 마킹되지 않은 부분(100%)을 완벽하게 보존하고,
-    마킹된 부분만 AI가 생성한 이미지로 교체합니다.
-    """
+    """마킹되지 않은 원본 영역 100% 보존, 마킹된 부분만 AI 이미지로 교체"""
     h, w = original_img_np.shape[:2]
-    # AI 결과물을 원본 크기에 맞춤
     generated_resized = cv2.resize(generated_img_np, (w, h))
-    
-    # 마스크를 3채널로 변환
     mask_3d = np.repeat(mask_np[:, :, np.newaxis], 3, axis=2)
-    
-    # 마스크 영역(255)은 생성된 이미지, 그 외 영역(0)은 무조건 원본 이미지 사용
     final_img_np = np.where(mask_3d > 0, generated_resized, original_img_np)
     return final_img_np
 
@@ -96,7 +100,7 @@ if "pasted_a_image" not in st.session_state:
 if "pasted_b_images" not in st.session_state:
     st.session_state.pasted_b_images = {}
 if "generated_results" not in st.session_state:
-    st.session_state.generated_results = [] # AI 생성 결과를 저장
+    st.session_state.generated_results = []
 
 # --- UI 구현 ---
 st.title("🍌 Nano Banana Pro: AI 마킹 영역 패턴 자연 합성기")
@@ -130,7 +134,6 @@ with col_a2:
         st.subheader("🖍️ 이미지 마킹 (빨간색으로 적용할 영역 그리기)")
         st.markdown("왼쪽 하단의 🗑️(휴지통) 또는 ↩️(실행취소) 버튼을 눌러 그리기 취소가 가능합니다.")
         
-        # 그리기 도구 선택
         drawing_mode_kr = st.radio("도구 선택:", ["자유곡선 (자유롭게 그리기)", "직선 (선 긋기)", "원형 (동그라미)"], horizontal=True, key="tool_select")
         mode_map = {"자유곡선 (자유롭게 그리기)": "freedraw", "직선 (선 긋기)": "line", "원형 (동그라미)": "circle"}
         drawing_mode = mode_map[drawing_mode_kr]
@@ -149,9 +152,9 @@ with col_a2:
 
         # 캔버스 컴포넌트 렌더링
         canvas_result = st_canvas(
-            fill_color="rgba(255, 0, 0, 0.3)",  # 채우기 색상
+            fill_color="rgba(255, 0, 0, 0.3)", 
             stroke_width=stroke_width,
-            stroke_color="#FF0000",             # 빨간색 펜
+            stroke_color="#FF0000",             
             background_image=img_a_resized_for_canvas,
             update_streamlit=True,
             height=canvas_h,
@@ -199,7 +202,6 @@ with col_b2:
 
 st.divider()
 
-# --- Step 3: AI 실행 ---
 st.header("Step 3. AI 자동 합성")
 if img_a_pil and all_b_images:
     if st.button("🚀 선택한 영역에 패턴 합성 실행", use_container_width=True, key="btn_start_ai"):
@@ -210,7 +212,6 @@ if img_a_pil and all_b_images:
         else:
             with st.spinner("🍌 나노 바나나 프로 AI 합성 중... (원본 이미지 형태 완벽 보존 처리 중)"):
                 try:
-                    # 1. 원본 해상도 사이즈로 복구된 마스크 생성
                     mask_np_resized = get_mask_from_canvas(canvas_result.image_data)
                     mask_np = cv2.resize(mask_np_resized, (img_a_pil.width, img_a_pil.height), interpolation=cv2.INTER_NEAREST)
                     
@@ -220,12 +221,10 @@ if img_a_pil and all_b_images:
                         img_a_np = np.array(img_a_pil)
                         results_temp = []
                         
-                        # 각 B 이미지마다 AI 처리
                         for b_name, b_img in all_b_images:
                             ai_output_pil = process_with_nano_banana(api_key, img_a_pil, mask_np, b_img)
                             ai_output_np = np.array(ai_output_pil)
                             
-                            # 2. 원본 영역은 100% 보존하고 마스크 영역만 적용 (Strict Compositing)
                             final_np = strict_composite(img_a_np, ai_output_np, mask_np)
                             final_pil = Image.fromarray(final_np)
                             
@@ -234,7 +233,6 @@ if img_a_pil and all_b_images:
                                 "image": final_pil
                             })
                             
-                        # 결과를 세션에 저장
                         st.session_state.generated_results = results_temp
                         st.success("🎉 합성이 완료되었습니다! 아래에서 결과를 확인하세요.")
                 except Exception as e:
@@ -242,7 +240,6 @@ if img_a_pil and all_b_images:
 
 st.divider()
 
-# --- Step 4: 결과 확인 및 선택 다운로드 ---
 if st.session_state.generated_results:
     st.header("Step 4. 결과 확인 및 다운로드")
     
@@ -252,14 +249,12 @@ if st.session_state.generated_results:
     for idx, res in enumerate(st.session_state.generated_results):
         with cols[idx % 3]:
             st.image(res["image"], caption=res["name"], use_container_width=True)
-            # 체크박스로 다운로드할 파일 선택 (기본값 True)
             if st.checkbox(f"저장 선택: {res['name']}", value=True, key=f"chk_{res['name']}_{idx}"):
                 selected_files.append(res)
                 
     if selected_files:
         st.write(f"선택된 파일 수: **{len(selected_files)}**장")
         
-        # 선택된 파일만 ZIP으로 묶기
         zip_buffer = io.BytesIO()
         with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zip_file:
             for item in selected_files:
