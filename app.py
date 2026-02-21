@@ -110,8 +110,6 @@ with col_a2:
             canvas_h = int(canvas_h * ratio)
             
         img_a_resized_for_canvas = img_a_pil.resize((canvas_w, canvas_h))
-
-        # 동적 키 할당 (이미지가 바뀌면 캔버스도 새롭게 인식)
         unique_canvas_key = f"canvas_{get_image_hash(img_a_resized_for_canvas)}"
 
         canvas_result = st_canvas(
@@ -156,7 +154,9 @@ with col_b2:
         with st.expander("🖼️ 준비된 패턴 이미지 미리보기"):
             cols = st.columns(3)
             for idx, (b_name, b_img) in enumerate(all_b_images):
-                cols[idx % 3].image(b_img, caption=b_name, use_container_width=True)
+                # 🚀 TypeError 완벽 방지: 이미지를 NumPy 배열로 변환하여 출력
+                cols[idx % 3].image(np.array(b_img), caption=b_name, use_container_width=True)
+            
             if st.session_state.pasted_b_images:
                 if st.button("🗑️ 붙여넣은 이미지 모두 지우기", key="btn_clear_b"):
                     st.session_state.pasted_b_images = {}
@@ -205,7 +205,8 @@ if st.session_state.generated_results:
     
     for idx, res in enumerate(st.session_state.generated_results):
         with cols[idx % 3]:
-            st.image(res["image"], caption=res["name"], use_container_width=True)
+            # 🚀 TypeError 완벽 방지: 결과 이미지도 NumPy 배열로 변환하여 출력
+            st.image(np.array(res["image"]), caption=res["name"], use_container_width=True)
             if st.checkbox(f"저장 선택: {res['name']}", value=True, key=f"chk_{res['name']}_{idx}"):
                 selected_files.append(res)
                 
