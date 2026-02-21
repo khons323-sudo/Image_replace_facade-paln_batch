@@ -5,33 +5,7 @@ from PIL import Image
 import io
 import zipfile
 import hashlib
-import base64
 from google import genai
-
-# --- [중요 패치] Streamlit 1.40.0+ 호환성 영구 해결 (Base64 인코딩 우회) ---
-import streamlit.elements.image as st_image
-def custom_image_to_url(image, width=None, clamp=False, channels="RGB", output_format="PNG", image_id="", *args, **kwargs):
-    """Streamlit 내부 API를 타지 않고 이미지를 Base64 Data URI로 직접 변환"""
-    try:
-        if isinstance(image, np.ndarray):
-            image = Image.fromarray(image)
-        
-        buffered = io.BytesIO()
-        # RGBA 모드일 경우 포맷 충돌 방지
-        if image.mode == "RGBA" and output_format.upper() == "JPEG":
-            image = image.convert("RGB")
-            
-        fmt = output_format if output_format else "PNG"
-        image.save(buffered, format=fmt)
-        img_str = base64.b64encode(buffered.getvalue()).decode()
-        return f"data:image/{fmt.lower()};base64,{img_str}"
-    except Exception as e:
-        st.error(f"Image to URL 변환 에러: {e}")
-        return ""
-
-# st_canvas가 호출하는 구버전 함수를 커스텀 함수로 완벽히 덮어씌움
-st_image.image_to_url = custom_image_to_url
-# -------------------------------------------------------------------------
 
 # 클립보드 붙여넣기 컴포넌트
 from streamlit_paste_button import paste_image_button
@@ -131,7 +105,7 @@ with col_a1:
 
 with col_a2:
     if img_a_pil:
-        st.subheader("🖍️ 이미지 마킹 (빨간색으로 적용할 영역 그리기)")
+        st.subheader("🖍️ 이미지 마킹 (적용할 영역 그리기)")
         st.markdown("왼쪽 하단의 🗑️(휴지통) 또는 ↩️(실행취소) 버튼을 눌러 그리기 취소가 가능합니다.")
         
         drawing_mode_kr = st.radio("도구 선택:", ["자유곡선 (자유롭게 그리기)", "직선 (선 긋기)", "원형 (동그라미)"], horizontal=True, key="tool_select")
@@ -140,7 +114,7 @@ with col_a2:
         
         stroke_width = st.slider("펜 굵기", 1, 50, 15, key="stroke_width")
         
-        # 캔버스 크기 최적화
+        # 캔버스 크기 최적화 (가로 800px 제한)
         max_width = 800
         canvas_w, canvas_h = img_a_pil.width, img_a_pil.height
         if canvas_w > max_width:
@@ -150,7 +124,7 @@ with col_a2:
             
         img_a_resized_for_canvas = img_a_pil.resize((canvas_w, canvas_h))
 
-        # 캔버스 컴포넌트 렌더링
+        # 캔버스 렌더링
         canvas_result = st_canvas(
             fill_color="rgba(255, 0, 0, 0.3)", 
             stroke_width=stroke_width,
