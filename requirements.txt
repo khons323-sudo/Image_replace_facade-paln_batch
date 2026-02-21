@@ -4,3 +4,4 @@ numpy
 Pillow
 google-genai
 streamlit-paste-button
+streamlit-drawable-canvas
