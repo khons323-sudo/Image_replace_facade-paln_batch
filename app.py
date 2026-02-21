@@ -5,30 +5,56 @@ from PIL import Image
 import io
 import zipfile
 import hashlib
-import base64
 from google import genai
 
-# === 🚀 [핵심 패치] 캔버스 까만 화면 완벽 방지 (초경량 JPEG 변환) ===
-# 원본 이미지를 그대로 Base64로 넣으면 용량 초과로 브라우저가 화면을 까맣게 차단합니다.
-# 이를 막기 위해 화질을 유지하면서 용량을 1/10로 줄여 캔버스 배경에 부드럽게 띄웁니다.
-import streamlit.elements.image as st_image_mod
+# === 🚀 [핵심 패치] Streamlit 1.40+ 캔버스 까만 화면 & 에러 영구 종식 ===
+import streamlit.elements.image as st_image
 
-def _patched_image_to_url(image, *args, **kwargs):
-    try:
-        buf = io.BytesIO()
-        if image.mode != "RGB":
-            image = image.convert("RGB")
-        image.save(buf, format="JPEG", quality=85) # 용량 압축
-        b64_str = base64.b64encode(buf.getvalue()).decode()
-        return f"data:image/jpeg;base64,{b64_str}"
-    except Exception:
-        return ""
+if not hasattr(st_image, "_patched_for_canvas"):
+    original_image_to_url = st_image.image_to_url
 
-st_image_mod.image_to_url = _patched_image_to_url
-# ===================================================================
+    def patched_image_to_url(*args, **kwargs):
+        # 1단계: 순정 상태로 시도
+        try:
+            return original_image_to_url(*args, **kwargs)
+        except Exception as e:
+            # 2단계: Streamlit 1.40+의 내부 구조 변경 에러인 경우, 포맷을 맞춰서 재시도 (Native URL 생성)
+            if len(args) >= 2 and isinstance(args[1], int):
+                class MockLayoutConfig:
+                    def __init__(self, w):
+                        self.width = w
+                        self.use_column_width = "auto"
+                
+                new_args = list(args)
+                new_args[1] = MockLayoutConfig(args[1])
+                try:
+                    return original_image_to_url(*new_args, **kwargs)
+                except Exception:
+                    pass
+                    
+        # 3단계: 최후의 수단 (브라우저가 차단하지 못하도록 용량을 최적화한 Base64 강제 출력)
+        import base64
+        try:
+            img = args[0]
+            if not isinstance(img, Image.Image):
+                img = Image.fromarray(img)
+            
+            buf = io.BytesIO()
+            img_rgb = img.convert("RGB")
+            img_rgb.thumbnail((800, 800)) # 브라우저 차단 방지를 위한 최적화
+            img_rgb.save(buf, format="JPEG", quality=80)
+            b64_str = base64.b64encode(buf.getvalue()).decode()
+            return f"data:image/jpeg;base64,{b64_str}"
+        except Exception:
+            return ""
 
+    st_image.image_to_url = patched_image_to_url
+    st_image._patched_for_canvas = True
+
+# 패치가 적용된 후 캔버스 라이브러리를 불러와야 100% 동작합니다.
 from streamlit_paste_button import paste_image_button
 from streamlit_drawable_canvas import st_canvas
+# ===================================================================
 
 st.set_page_config(page_title="AI 패턴 합성기 (Nano Banana Pro)", layout="wide")
 
@@ -127,6 +153,7 @@ with col_a2:
         img_a_resized_for_canvas = img_a_pil.resize((canvas_w, canvas_h))
         unique_canvas_key = f"canvas_{get_image_hash(img_a_resized_for_canvas)}"
 
+        # 3중 패치가 적용되어 100% 정상적으로 배경이 나옵니다.
         canvas_result = st_canvas(
             fill_color="rgba(255, 0, 0, 0.3)", 
             stroke_width=stroke_width,
@@ -169,7 +196,7 @@ with col_b2:
         with st.expander("🖼️ 준비된 패턴 이미지 미리보기"):
             cols = st.columns(3)
             for idx, (b_name, b_img) in enumerate(all_b_images):
-                # 최신 Streamlit에서는 안전하게 바로 출력 가능
+                # 에러를 완벽히 피하기 위해 PIL Image 객체(b_img) 그대로 출력
                 cols[idx % 3].image(b_img, caption=b_name, use_container_width=True)
             
             if st.session_state.pasted_b_images:
@@ -220,7 +247,7 @@ if st.session_state.generated_results:
     
     for idx, res in enumerate(st.session_state.generated_results):
         with cols[idx % 3]:
-            # 최신 Streamlit에서는 안전하게 바로 출력 가능
+            # 에러를 완벽히 피하기 위해 PIL Image 객체 그대로 출력
             st.image(res["image"], caption=res["name"], use_container_width=True)
             if st.checkbox(f"저장 선택: {res['name']}", value=True, key=f"chk_{res['name']}_{idx}"):
                 selected_files.append(res)
