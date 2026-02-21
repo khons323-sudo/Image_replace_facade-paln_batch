@@ -1,7 +1,6 @@
-streamlit==1.33.0
-numpy<2.0.0
-protobuf<5.0.0
+streamlit
 opencv-python-headless
+numpy
 Pillow
 google-genai
 streamlit-paste-button
