@@ -1,6 +1,6 @@
-streamlit
+streamlit==1.35.0
+numpy<2.0.0
 opencv-python-headless
-numpy
 Pillow
 google-genai
 streamlit-paste-button
