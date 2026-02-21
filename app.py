@@ -5,20 +5,45 @@ from PIL import Image
 import io
 import zipfile
 import hashlib
+import base64
 from google import genai
+
+# --- 🚀 [핵심 패치 1] 캔버스 배경 검은색(투명) 오류 완벽 차단 ---
+import streamlit_drawable_canvas
+def patched_image_to_url(image, *args, **kwargs):
+    """Streamlit 내부망을 거치지 않고 직접 Base64로 이미지를 그려버립니다."""
+    try:
+        buffered = io.BytesIO()
+        image.save(buffered, format="PNG")
+        img_str = base64.b64encode(buffered.getvalue()).decode()
+        return f"data:image/png;base64,{img_str}"
+    except Exception:
+        return ""
+
+# 캔버스 라이브러리 내부 함수를 강제로 내가 만든 안전한 함수로 바꿔치기
+if hasattr(streamlit_drawable_canvas, "st_image"):
+    streamlit_drawable_canvas.st_image.image_to_url = patched_image_to_url
+elif hasattr(streamlit_drawable_canvas, "image_to_url"):
+    streamlit_drawable_canvas.image_to_url = patched_image_to_url
+# -----------------------------------------------------------
 
 from streamlit_paste_button import paste_image_button
 from streamlit_drawable_canvas import st_canvas
 
-# Streamlit 페이지 설정
 st.set_page_config(page_title="AI 패턴 합성기 (Nano Banana Pro)", layout="wide")
 
+# --- 🚀 [핵심 패치 2] TypeError 완벽 방지 이미지 출력 함수 ---
+def display_image_safe(container, pil_img, caption):
+    """Numpy 충돌(TypeError)을 피하기 위해 이미지를 순수 바이트 데이터로 화면에 출력합니다."""
+    buf = io.BytesIO()
+    pil_img.save(buf, format="PNG")
+    container.image(buf.getvalue(), caption=caption, use_container_width=True)
+# -----------------------------------------------------------
+
 def get_image_hash(pil_img):
-    """캔버스 새로고침 및 중복 방지를 위한 이미지 해시 생성"""
     return hashlib.md5(pil_img.tobytes()).hexdigest()
 
 def get_mask_from_canvas(canvas_image_data):
-    """캔버스 데이터(RGBA)에서 마킹 영역을 꽉 채운 마스크 추출"""
     if canvas_image_data is None:
         return None
     alpha = canvas_image_data[:, :, 3]
@@ -31,14 +56,12 @@ def get_mask_from_canvas(canvas_image_data):
     return cv2.bitwise_or(filled_mask, drawn_mask)
 
 def strict_composite(original_img_np, generated_img_np, mask_np):
-    """마킹되지 않은 원본 100% 보존, 마킹 영역만 합성"""
     h, w = original_img_np.shape[:2]
     generated_resized = cv2.resize(generated_img_np, (w, h))
     mask_3d = np.repeat(mask_np[:, :, np.newaxis], 3, axis=2)
     return np.where(mask_3d > 0, generated_resized, original_img_np)
 
 def process_with_nano_banana(api_key, img_a_pil, mask_np, img_b_pil):
-    """나노 바나나 프로(Gemini) API 호출"""
     client = genai.Client(api_key=api_key)
     mask_pil = Image.fromarray(mask_np).convert("L")
     prompt = """
@@ -112,7 +135,6 @@ with col_a2:
         img_a_resized_for_canvas = img_a_pil.resize((canvas_w, canvas_h))
         unique_canvas_key = f"canvas_{get_image_hash(img_a_resized_for_canvas)}"
 
-        # 순정 st_canvas 호출 (Streamlit 1.39.0 환경에서 100% 정상 작동)
         canvas_result = st_canvas(
             fill_color="rgba(255, 0, 0, 0.3)", 
             stroke_width=stroke_width,
@@ -155,9 +177,8 @@ with col_b2:
         with st.expander("🖼️ 준비된 패턴 이미지 미리보기"):
             cols = st.columns(3)
             for idx, (b_name, b_img) in enumerate(all_b_images):
-                # Numpy 2.0 충돌을 피하기 위해 안전하게 변환
-                safe_img = np.array(b_img)
-                cols[idx % 3].image(safe_img, caption=b_name, use_container_width=True)
+                # TypeError 원천 차단: 안전 함수 사용
+                display_image_safe(cols[idx % 3], b_img, b_name)
             
             if st.session_state.pasted_b_images:
                 if st.button("🗑️ 붙여넣은 이미지 모두 지우기", key="btn_clear_b"):
@@ -207,7 +228,8 @@ if st.session_state.generated_results:
     
     for idx, res in enumerate(st.session_state.generated_results):
         with cols[idx % 3]:
-            st.image(np.array(res["image"]), caption=res["name"], use_container_width=True)
+            # TypeError 원천 차단: 안전 함수 사용
+            display_image_safe(cols[idx % 3], res["image"], res["name"])
             if st.checkbox(f"저장 선택: {res['name']}", value=True, key=f"chk_{res['name']}_{idx}"):
                 selected_files.append(res)
                 
